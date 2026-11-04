@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 T = 100*second
 N = 1000
-F = 15*Hz
+F = 6*Hz
 
 # Param Neurones
 w_inh = 0.05
@@ -90,7 +90,7 @@ def graphique_choisi(forme):
             ''')
     return None
 
-stdp_model, stdp_pre, stdp_post = graphique_choisi(1)
+stdp_model, stdp_pre, stdp_post = graphique_choisi(0)
 
 def stdp_synapses(source, target, forme):
     S = Synapses(source, target, stdp_model,

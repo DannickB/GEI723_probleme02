@@ -20,21 +20,26 @@ taupre = 20*ms
 taupost = taupre
 
 gmax = .01
-dApre = .01 * gmax
-dApost = -.01 * gmax
+F_ref = 15*Hz
+eta = 0.01 * gmax * (F_ref / F)
+dApre, dApost = eta, -1.05 * eta
+
+tau_theta = 5*second
+dtheta = 0.1*mV
 
 eqs_neurons = '''
 dv/dt = (ge * (Ee-v) + gi * (Ei - v) + El - v) / taum : volt
 dge/dt = -ge / taue : 1
 dgi/dt = -gi / taui : 1
+dtheta/dt = -theta / tau_theta : volt
 taum: second (constant)
 '''
 
 # Neurones -----------------------------------------------------------------------------
 
 poisson_input = PoissonGroup(N, rates=F)
-E = NeuronGroup(1, eqs_neurons, threshold='v>vt', reset='v = vr', method='euler')
-I = NeuronGroup(1, eqs_neurons, threshold='v>vt', reset='v = vr', method='euler')
+E = NeuronGroup(1, eqs_neurons, threshold='v>vt + theta', reset='v = vr; theta += dtheta', method='euler')
+I = NeuronGroup(1, eqs_neurons, threshold='v>vt + theta', reset='v = vr; theta += dtheta', method='euler')
 
 E.v = vr
 I.v = vr
@@ -54,12 +59,12 @@ def graphique_choisi(forme):
             '''
             ge += w
             Apre += dApre
-            w = clip(w + Apost, 0, gmax)
+            w = clip(w + Apost * w / gmax, 0, gmax)
             ''',
             '''
             Apost += dApost
-            w = clip(w + Apre, 0, gmax)
-            ''')
+             w = clip(w + Apre * (1 - w / gmax), 0, gmax)
+             ''')
         case 1:
             return ('''
             w : 1

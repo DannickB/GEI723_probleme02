@@ -1,3 +1,5 @@
 .venv
 .idea
 *.pdf
+**/build_cpp_standalone/
+

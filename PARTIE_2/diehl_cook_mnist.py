@@ -43,12 +43,13 @@ from brian2 import *
 DEVICE = 'cpp_standalone'   # 'runtime' | 'cpp_standalone' | 'cuda_standalone'
 
 SEED = 0
-N_SAMPLES = 1000          # sous-ensemble de MNIST (70 000 au total)
-N_TEST = 500
+N_SAMPLES = 7000          # sous-ensemble de MNIST (70 000 au total)
+FRAC_TEST = 0.10
+FRAC_VALID = 0.10
 N_EPOCHS = 1
 
 N_INPUT = 28 * 28         # un neurone d'entrée par pixel
-N_NEURONS = 100           # neurones excitateurs (= inhibiteurs) ; Diehl & Cook : 100 à 6400
+N_NEURONS = 28*28           # neurones excitateurs (= inhibiteurs) ; Diehl & Cook : 100 à 6400
 
 NORMALISER = True         # normalisation divisive des poids d'entrée
 norm_target = 78.         # somme visée des poids entrant dans chaque neurone
@@ -98,17 +99,20 @@ def configurer_device():
 # =============================================================================
 # 2. DONNÉES
 # =============================================================================
-def charger_donnees(n_samples=N_SAMPLES, n_test=N_TEST):
-    """Télécharge MNIST (OpenML 554) et retourne un découpage entraînement/test.
-    Attention : « test » désigne en fait des données de validation."""
+def charger_donnees(n_samples=N_SAMPLES, frac_test=FRAC_TEST, frac_valid=FRAC_VALID):
+    """Découpage entraînement / validation / test (stratifié par classe)."""
     X_all, y_all = datasets.fetch_openml('mnist_784', version=1,
                                          return_X_y=True, as_frame=False,
                                          parser='liac-arff')
-    X_all = X_all.astype(float)
-    X, y = X_all[:n_samples], y_all[:n_samples].astype(int)
-    X_train, X_test, y_train, y_test = model_selection.train_test_split(
-        X, y, test_size=n_test, random_state=SEED)
-    return X_train, y_train, X_test, y_test
+    X, y = X_all[:n_samples].astype(float), y_all[:n_samples].astype(int)
+
+    X_train, X_temp, y_train, y_temp = model_selection.train_test_split(
+        X, y, test_size=frac_test + frac_valid, random_state=SEED, stratify=y)
+    X_valid, X_test, y_valid, y_test = model_selection.train_test_split(
+        X_temp, y_temp, test_size=frac_test / (frac_test + frac_valid),
+        random_state=SEED, stratify=y_temp)
+
+    return X_train, y_train, X_valid, y_valid, X_test, y_test
 
 
 def afficher_echantillon(X, y, index=None):
@@ -381,21 +385,25 @@ def main():
     np.random.seed(SEED)
     seed(SEED)
 
-    X_train, y_train, X_test, y_test = charger_donnees()
+    X_train, y_train, X_valid, y_valid, X_test, y_test = charger_donnees()
 
-    # Séquence jouée : les époques d'entraînement, puis le test
-    X_seq = np.concatenate([np.tile(X_train, (N_EPOCHS, 1)), X_test])
+    # Séquence jouée : entraînement (plastique), puis validation et test (gelés)
+    X_seq = np.concatenate([np.tile(X_train, (N_EPOCHS, 1)), X_valid, X_test])
     n_train = N_EPOCHS * len(X_train)
-    n_test = len(X_test)
+    n_valid, n_test = len(X_valid), len(X_test)
 
     reseau = creer_reseau(X_seq)
-    simuler(reseau, n_train, n_test)
+    simuler(reseau, n_train, n_valid + n_test)
 
-    counts = compter_decharges(reseau['e_monitor'], n_train + n_test)
-    counts_train = counts[:n_train][-len(X_train):]     # dernière époque
-    counts_test = counts[n_train:]
+    counts = compter_decharges(reseau['e_monitor'], n_train + n_valid + n_test)
+    counts_train = counts[:n_train][-len(X_train):]  # dernière époque
+    counts_valid = counts[n_train:n_train + n_valid]
+    counts_test = counts[n_train + n_valid:]
 
     labeled_neurons, _ = etiqueter_neurones(counts_train, y_train)
+    print("Validation :");
+    evaluer(counts_valid, y_valid, labeled_neurons)
+    print("Test :");
     evaluer(counts_test, y_test, labeled_neurons)
     afficher_champs_recepteurs(reseau['input_synapse'])
 

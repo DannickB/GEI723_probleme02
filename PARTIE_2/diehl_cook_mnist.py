@@ -43,13 +43,13 @@ from brian2 import *
 DEVICE = 'cpp_standalone'   # 'runtime' | 'cpp_standalone' | 'cuda_standalone'
 
 SEED = 0
-N_SAMPLES = 7000          # sous-ensemble de MNIST (70 000 au total)
+N_SAMPLES = 35000*2          # sous-ensemble de MNIST (70 000 au total)
 FRAC_TEST = 0.10
 FRAC_VALID = 0.10
 N_EPOCHS = 1
 
 N_INPUT = 28 * 28         # un neurone d'entrée par pixel
-N_NEURONS = 28*28           # neurones excitateurs (= inhibiteurs) ; Diehl & Cook : 100 à 6400
+N_NEURONS = 100          # neurones excitateurs (= inhibiteurs) ; Diehl & Cook : 100 à 6400
 
 NORMALISER = True         # normalisation divisive des poids d'entrée
 norm_target = 78.         # somme visée des poids entrant dans chaque neurone
@@ -177,7 +177,7 @@ def creer_neurones(n_neurons=N_NEURONS):
         threshold='v >= v_thresh_e + theta',
         reset='v = v_reset_e; theta += int(homeostasie) * theta_plus_e',
         method='euler', name='excitateurs')
-    excitatory_group.homeostasie = True
+    excitatory_group.homeostasie = False
     excitatory_group.tau = 100 * ms
     excitatory_group.v_rest = v_rest_e
     excitatory_group.E_inh = -100. * mV
@@ -228,7 +228,7 @@ def creer_synapses(input_group, excitatory_group, inhibitory_group):
                              model=stdp_synapse_model,
                              on_pre=stdp_pre, on_post=stdp_post,
                              name='entree_vers_E')
-    input_synapse.connect(True)               # tout-à-tout
+    input_synapse.connect(condition=True, p=1)               # tout-à-tout
     input_synapse.delay = 'rand()*10*ms'
     input_synapse.plastic = True
     input_synapse.w = 'rand()*0.3'
@@ -246,14 +246,14 @@ def creer_synapses(input_group, excitatory_group, inhibitory_group):
     e_i_synapse = Synapses(excitatory_group, inhibitory_group,
                            model=synapse_model, on_pre='ge_post += w',
                            name='E_vers_I')
-    e_i_synapse.connect(True, p=0.0025)
+    e_i_synapse.connect(condition="i==j", p=1)
     e_i_synapse.w = 'rand()*10.4'
 
     # Inhibiteurs → excitateurs : synapse INHIBITRICE (gi)
     i_e_synapse = Synapses(inhibitory_group, excitatory_group,
                            model=synapse_model, on_pre='gi_post += w',
                            name='I_vers_E')
-    i_e_synapse.connect(True, p=0.9)
+    i_e_synapse.connect(condition="i!=j", p=1)
     i_e_synapse.w = 'rand()*17.0'
 
     return input_synapse, e_i_synapse, i_e_synapse
@@ -335,25 +335,29 @@ def compter_decharges(e_monitor, n_images, n_neurons=N_NEURONS):
 # 9. ÉTIQUETAGE
 # =============================================================================
 def etiqueter_neurones(counts_train, y_train):
-    """Pour chaque classe, le neurone qui a le plus déchargé."""
-    spikes = np.zeros((10, counts_train.shape[1]))
+    """Chaque neurone est assigné à la classe pour laquelle il décharge le plus (en moyenne)."""
+    moyennes = np.zeros((10, counts_train.shape[1]))
     for c in range(10):
-        spikes[c] = counts_train[y_train == c].sum(axis=0)
-    labeled_neurons = np.argmax(spikes, axis=1)
-    print("Neurones étiquetés (classe → neurone) :", labeled_neurons)
-    return labeled_neurons, spikes
+        moyennes[c] = counts_train[y_train == c].mean(axis=0)
+    assignations = np.argmax(moyennes, axis=0)        # (n_neurons,) : classe de chaque neurone
+    print("Neurones par classe :", np.bincount(assignations, minlength=10))
+    return assignations, moyennes
 
 
 # =============================================================================
 # 10. ÉVALUATION
 # =============================================================================
-def evaluer(counts_test, y_test, labeled_neurons):
-    """Prédiction = classe dont le neurone étiqueté a le plus déchargé."""
-    predictions = np.argmax(counts_test[:, labeled_neurons], axis=1)
-    accuracy = np.mean(predictions == y_test)
-    silencieux = np.mean(counts_test.sum(axis=1) == 0)
-    print(f"Précision du modèle : {accuracy:.3f}")
-    print(f"Images sans aucune décharge : {silencieux:.1%}")
+def evaluer(counts, y, assignations):
+    """Vote : classe dont les neurones assignés déchargent le plus en moyenne."""
+    votes = np.zeros((len(counts), 10))
+    for c in range(10):
+        membres = assignations == c
+        if membres.any():
+            votes[:, c] = counts[:, membres].mean(axis=1)
+    predictions = np.argmax(votes, axis=1)
+    accuracy = np.mean(predictions == y)
+    silencieux = np.mean(counts.sum(axis=1) == 0)
+    print(f"Précision : {accuracy:.3f}   (images sans décharge : {silencieux:.1%})")
     return accuracy, predictions
 
 

@@ -30,6 +30,9 @@ Organisation :
    12. RÉSULTATS              ajout d'une ligne dans Figure/resultats.csv
    13. main()
 """
+from brian2 import *
+# Imports de la bibliothèque standard APRÈS « from brian2 import * » :
+# Brian2 exporte aussi des noms comme « datetime » qui écraseraient les nôtres.
 import csv
 import time
 from datetime import datetime
@@ -38,7 +41,6 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import datasets, model_selection
-from brian2 import *
 
 # =============================================================================
 # 1. PARAMÈTRES
@@ -49,13 +51,13 @@ from brian2 import *
 DEVICE = 'cpp_standalone'   # 'runtime' | 'cpp_standalone' | 'cuda_standalone'
 
 SEED = 0
-N_SAMPLES = 70000         # sous-ensemble de MNIST (70 000 au total)
+N_SAMPLES = 60000         # sous-ensemble de MNIST (70 000 au total)
 FRAC_TEST = 0.10
 FRAC_VALID = 0.10
 N_EPOCHS = 1
 
 N_INPUT = 28 * 28         # un neurone d'entrée par pixel
-N_NEURONS = 150           # neurones excitateurs (= inhibiteurs) ; Diehl & Cook : 100 à 6400
+N_NEURONS = 200           # neurones excitateurs (= inhibiteurs) ; Diehl & Cook : 100 à 6400
 
 HOMEOSTASIE = True        # seuil adaptatif pendant l'entraînement
 NORMALISER = True         # normalisation divisive des poids d'entrée
@@ -404,6 +406,117 @@ def fig_champs_recepteurs(W, assignations, dossier):
     sauvegarder(fig, dossier, 'champs_recepteurs')
 
 
+def en_grille(valeurs, n_neurons=N_NEURONS):
+    """Range un vecteur (un nombre par neurone) dans la même grille que les
+    champs récepteurs : le neurone k est au même endroit dans les deux figures."""
+    cote = int(np.ceil(np.sqrt(n_neurons)))
+    rangees = int(np.ceil(n_neurons / cote))
+    grille = np.full(cote * rangees, np.nan)
+    grille[:n_neurons] = valeurs
+    return grille.reshape(rangees, cote)
+
+
+def fig_courbes_accord(moyennes, assignations, dossier):
+    """Courbes d'accord : réponse moyenne de chaque neurone à chaque classe.
+
+    Gauche : tous les neurones (normalisés par leur maximum), triés par classe
+             assignée puis par sélectivité.
+    Droite : le neurone le plus sélectif de chaque classe.
+    """
+    n = moyennes.shape[1]
+    norm = moyennes / np.maximum(moyennes.max(axis=0, keepdims=True), 1e-12)
+    # Sélectivité : réponse à la classe préférée vs moyenne des autres classes
+    pref = moyennes.max(axis=0)
+    autres = (moyennes.sum(axis=0) - pref) / 9
+    selectivite = (pref - autres) / np.maximum(pref + autres, 1e-12)
+    ordre = np.lexsort((-selectivite, assignations))
+
+    fig = plt.figure(figsize=(14, 5))
+    ax0 = fig.add_subplot(1, 2, 1)
+    im = ax0.imshow(norm[:, ordre], aspect='auto', cmap='viridis', vmin=0, vmax=1,
+                    interpolation='nearest')
+    ax0.set_yticks(range(10))
+    ax0.set_ylabel('Classe présentée')
+    ax0.set_xlabel('Neurones (triés par classe assignée)')
+    frontieres = np.flatnonzero(np.diff(assignations[ordre])) + 0.5
+    for f in frontieres:
+        ax0.axvline(f, color='white', lw=0.6)
+    ax0.set_title("Courbes d'accord (réponse / réponse max du neurone)")
+    fig.colorbar(im, ax=ax0, fraction=0.04)
+
+    ax1 = fig.add_subplot(1, 2, 2)
+    for c in range(10):
+        membres = np.flatnonzero(assignations == c)
+        if len(membres) == 0:
+            continue
+        k = membres[np.argmax(selectivite[membres])]
+        ax1.plot(range(10), moyennes[:, k], marker='o', ms=3,
+                 label=f'classe {c} (n°{k}, S={selectivite[k]:.2f})')
+    ax1.set_xticks(range(10))
+    ax1.set_xlabel('Classe présentée')
+    ax1.set_ylabel('Décharges moyennes par image')
+    ax1.set_title('Neurone le plus sélectif de chaque classe')
+    ax1.legend(fontsize=7, ncol=2)
+    fig.tight_layout()
+    sauvegarder(fig, dossier, 'courbes_accord')
+
+    # Distribution de la sélectivité (utile pour comparer des configurations)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(selectivite[np.isfinite(selectivite)], bins=30, color='tab:green')
+    ax.set_xlabel('Indice de sélectivité S (0 = aucune, 1 = une seule classe)')
+    ax.set_ylabel('Nombre de neurones')
+    ax.set_title(f'Sélectivité des neurones (médiane {np.nanmedian(selectivite):.2f})')
+    sauvegarder(fig, dossier, 'selectivite')
+
+
+def cmap_activite():
+    """Carte de couleurs 'hot' où les cases sans neurone (NaN) sont grises."""
+    cmap = plt.get_cmap('hot').copy()
+    cmap.set_bad('#bbbbbb')
+    return cmap
+
+
+def fig_cartes_activation_classes(counts, y, dossier, nom):
+    """Activité moyenne de la couche excitatrice pour chaque classe,
+    disposée comme la grille des champs récepteurs."""
+    fig, axes = plt.subplots(2, 5, figsize=(14, 6))
+    cartes = [en_grille(counts[y == c].mean(axis=0)) for c in range(10)]
+    vmax = np.nanmax(cartes)
+    for c, ax in enumerate(axes.flat):
+        im = ax.imshow(cartes[c], cmap=cmap_activite(), vmin=0, vmax=vmax,
+                       interpolation='nearest')
+        ax.set_title(f'Classe {c}')
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.colorbar(im, ax=axes, fraction=0.02, label='Décharges moyennes par image')
+    fig.suptitle(f"Cartes d'activation moyennes par classe ({nom})")
+    sauvegarder(fig, dossier, f'cartes_activation_{nom}')
+
+
+def fig_exemples_activation(X, counts, y, predictions, dossier, nom, n_exemples=8):
+    """Quelques images et l'activité de la couche qu'elles provoquent
+    (titre vert = bonne prédiction, rouge = erreur)."""
+    rng = np.random.default_rng(SEED)
+    choix = rng.choice(len(X), size=min(n_exemples, len(X)), replace=False)
+    fig, axes = plt.subplots(2, len(choix), figsize=(1.8 * len(choix), 4))
+    for col, k in enumerate(choix):
+        axes[0, col].imshow(X[k].reshape(28, 28), cmap='gray_r')
+        bon = predictions[k] == y[k]
+        axes[0, col].set_title(f'vrai {y[k]} / prédit {predictions[k]}', fontsize=8,
+                               color='green' if bon else 'red')
+        axes[1, col].imshow(en_grille(counts[k]), cmap=cmap_activite(),
+                            interpolation='nearest')
+        axes[1, col].set_xlabel(f'{int(counts[k].sum())} décharges', fontsize=8)
+        for a in axes[:, col]:
+            a.set_xticks([])
+            a.set_yticks([])
+    axes[0, 0].set_ylabel('Entrée')
+    axes[1, 0].set_ylabel('Couche E')
+    fig.suptitle(f"Exemples d'activation ({nom})")
+    fig.tight_layout()
+    sauvegarder(fig, dossier, f'exemples_activation_{nom}')
+
+
 def fig_histogramme_poids(W, dossier):
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.hist(W.ravel(), bins=50, color='tab:blue')
@@ -538,7 +651,7 @@ def main():
     counts_valid = counts[n_train:n_train + n_valid]
     counts_test = counts[n_train + n_valid:]
 
-    assignations, _ = etiqueter_neurones(counts_train, y_train)
+    assignations, moyennes = etiqueter_neurones(counts_train, y_train)
     res_valid, pred_valid = evaluer(counts_valid, y_valid, assignations, 'Validation')
     res_test, pred_test = evaluer(counts_test, y_test, assignations, 'Test')
 
@@ -554,6 +667,9 @@ def main():
     fig_matrice_confusion(y_valid, pred_valid, dossier, 'validation')
     fig_matrice_confusion(y_test, pred_test, dossier, 'test')
     fig_activite(counts, n_train, n_valid, dossier)
+    fig_courbes_accord(moyennes, assignations, dossier)
+    fig_cartes_activation_classes(counts_valid, y_valid, dossier, 'validation')
+    fig_exemples_activation(X_valid, counts_valid, y_valid, pred_valid, dossier, 'validation')
     if HOMEOSTASIE:
         fig_theta(reseau['excitatory_group'], dossier)
 

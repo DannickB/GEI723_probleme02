@@ -1,0 +1,2 @@
+date;configuration;epoques;neurones;homeostasie;normalisation;mu;xtar;n_train;seed;device;temps_min;valid;valid_actives;valid_silence;test;test_actives;test_silence
+2026-11-08 16:25;N200_ep1_s60000_homeo1_mu0.2_xtar0.3;1;200;True;True;0.2;0.3;48000;0;cpp_standalone;104.9;0.561;0.799;0.312;0.55;0.799;0.328

@@ -1,6 +1,16 @@
 """
 STDP - Neurosciences computationnelles et applications en traitement de l’information
+bild2707
+labc0301
+trum1304
 
+Exécution : pip install -r requirements.txt, puis python diehl_cook_mnist.py
+- DEVICE = 'cpp_standalone' demande un compilateur C++. Le dossier build_cpp_standalone
+  est régénéré et recompilé à chaque exécution.
+- Sans compilateur : DEVICE = 'runtime' et prefs.codegen.target = 'numpy' dans
+  configurer_device() (beaucoup plus lent, à réserver à un petit N_SAMPLES).
+- Évaluer un réseau sauvegardé sans réentraîner : CHARGER = chemin du .npz et
+  ENTRAINER = False, avec les mêmes SEED et N_SAMPLES que l'entraînement.
 """
 import os
 import threading
@@ -14,7 +24,7 @@ from brian2 import *
 # =============================================================================
 # 1. PARAMÈTRES
 # =============================================================================
-DEVICE = 'cpp_standalone'   # 'runtime' | 'cpp_standalone' | 'cuda_standalone'
+DEVICE = 'cpp_standalone'   # 'runtime' | 'cpp_standalone'
 N_THREADS = 10              # fils OpenMP (cpp_standalone)
 
 SEED = 42
@@ -74,9 +84,6 @@ def configurer_device():
     elif DEVICE == 'cpp_standalone':
         set_device('cpp_standalone', build_on_run=False)
         prefs.devices.cpp_standalone.openmp_threads = N_THREADS
-    elif DEVICE == 'cuda_standalone':
-        import brian2cuda  # noqa: F401  (pip install brian2cuda)
-        set_device('cuda_standalone', build_on_run=False)
     else:
         raise ValueError(DEVICE)
 

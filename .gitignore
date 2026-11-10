@@ -3,3 +3,5 @@
 *.pdf
 **/build_cpp_standalone/
 
+*.pyc
+*.npz

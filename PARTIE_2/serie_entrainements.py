@@ -1,8 +1,8 @@
 """
-GEI723 - Probleme 2, partie III : series of trainings, one parameter at a time.
+GEI723 - Probleme 2, partie III : series of trainings.
 
-Starting from the default parameters of diehl_cook_mnist.py, each run changes a
-single parameter (no grid search). Every run saves its network in
+Starting from the default parameters of diehl_cook_mnist.py, each run changes
+the parameters listed in SERIE (no grid search). Every run saves its network in
 resultats/serie/<name>/ and appends one line to resultats/serie/resultats.csv.
 Runs already present in the CSV are skipped, so an interrupted series can
 simply be restarted.
@@ -15,7 +15,7 @@ readout comparison costs no extra training:
 Usage (from the project root):
     .venv\\Scripts\\python.exe PARTIE_2\\serie_entrainements.py
 
-Estimated duration with 7000 images: about 8.5 h for the 11 runs below.
+Estimated duration with 7000 images: about 2 h for the 3 runs below.
 """
 import csv
 import glob
@@ -34,19 +34,14 @@ DOSSIER_SERIE = os.path.join(DOSSIER, 'resultats', 'serie')
 FICHIER_CSV = os.path.join(DOSSIER_SERIE, 'resultats.csv')
 
 # (run name, parameters changed from the defaults of diehl_cook_mnist.py)
+# Combinations of the best single-parameter changes from the first series
+# (2 epochs, P_EI = 0.5, nu_ee_post / 10). The first two raise the per-neuron
+# firing during training through the same mechanism and may overshoot when
+# combined, hence the separate pairs.
 SERIE = [
-    ('base', {}),
-    ('epoques_2', {'N_EPOCHS': 2}),
-    ('epoques_3', {'N_EPOCHS': 3}),
-    ('neurones_100', {'N_NEURONS': 100}),
-    ('neurones_400', {'N_NEURONS': 400}),
-    ('homeostasie_off', {'theta_plus_e_mV': 0.0}),
-    ('p_ie_0.5', {'P_IE': 0.5}),
-    ('p_ei_0.5', {'P_EI': 0.5}),
-    # The default nu_ee_post (0.01) is treated as the upper bound.
-    ('nu_post_div3', {'nu_ee_post': 0.0033}),
-    ('nu_post_div10', {'nu_ee_post': 0.001}),
-    ('nu_post_div100', {'nu_ee_post': 0.0001}),
+    ('combo_nu10_ep2', {'nu_ee_post': 0.001, 'N_EPOCHS': 2}),
+    ('combo_nu10_pei05', {'nu_ee_post': 0.001, 'P_EI': 0.5}),
+    ('combo_nu10_ep2_pei05', {'nu_ee_post': 0.001, 'N_EPOCHS': 2, 'P_EI': 0.5}),
 ]
 
 # Executed in a fresh Python process for each run: Brian2 standalone can only

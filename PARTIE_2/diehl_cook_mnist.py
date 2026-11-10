@@ -60,10 +60,10 @@ DEVICE = 'cpp_standalone'   # 'runtime' | 'cpp_standalone' | 'cuda_standalone'
 N_THREADS = 10
 
 SEED = 42
-N_SAMPLES = 7000          # sous-ensemble de MNIST (70 000 au total)
+N_SAMPLES = 70000          # sous-ensemble de MNIST (70 000 au total)
 FRAC_TEST = 0.10
 FRAC_VALID = 0.10
-N_EPOCHS = 1
+N_EPOCHS = 2
 
 # Sauvegarde / rechargement du réseau appris
 DOSSIER_RESULTATS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resultats')
@@ -104,7 +104,7 @@ refrac_i = 2. * ms
 
 # Homéostasie (seuil adaptatif)
 tc_theta = 1e7 * ms
-theta_plus_e = 0.05 * mV
+theta_plus_e = 0.025 * mV     # Diehl & Cook: 0.05 mV (they also re-present images with <5 spikes)
 
 # STDP (Diehl & Cook, éq. 3)
 tc_pre_ee = 20 * ms

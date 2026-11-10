@@ -1,43 +1,6 @@
 """
-GEI723 – Automne 2026 – Problème 2, partie II
-Classification MNIST par STDP (adaptation de Diehl & Cook, 2015)
+STDP - Neurosciences computationnelles et applications en traitement de l’information
 
-Version compatible GPU (Brian2CUDA) et C++ standalone.
-
-En mode « standalone », Brian2 génère et compile UN programme qui simule tout
-d'un coup : on ne peut plus exécuter de Python entre deux images. Donc :
-  - les images sont fournies par des TimedArray (au lieu de changer
-    input_group.rates dans une boucle) ;
-  - la normalisation des poids se fait dans la simulation (variable
-    « summed » + run_regularly) ;
-  - le comptage des décharges par image se fait APRÈS la simulation, à
-    partir des temps de décharge enregistrés.
-Cette structure fonctionne aussi en mode 'runtime' (et y est déjà beaucoup
-plus rapide qu'une boucle de net.run()).
-
-Organisation :
-    1. PARAMÈTRES             (dont DEVICE : 'runtime', 'cpp_standalone', 'cuda_standalone')
-    2. charger_donnees()      MNIST → X_train, y_train, X_test, y_test
-    3. creer_stimulus()       séquence d'images → TimedArray
-    4. creer_neurones()       couches excitatrice et inhibitrice
-    5. creer_synapses()       entrée→E (STDP éq. 3), E→I, I→E, normalisation
-    6. creer_reseau()         assemble tout
-    7. simuler()              entraînement, étiquetage gelé, validation, test
-                              en une seule simulation
-    8. compter_decharges()    décharges par (image, neurone)
-    9. etiqueter_neurones()   classe de chaque neurone (réponse moyenne max)
-   10. evaluer()              précision (vote : moyenne des neurones par classe)
-   11. afficher_champs_recepteurs()
-   12. sauvegarder_reseau() / charger_reseau()
-   13. main()
-
-Sauvegarde / rechargement : à la fin de chaque exécution, le réseau appris
-(connectivité, poids, délais, seuils adaptatifs theta) et les résultats sont
-écrits dans resultats/*.npz (SAUVEGARDER). Pour repartir d'un réseau appris,
-mettre son chemin dans CHARGER :
-  - ENTRAINER = True  : poursuit l'apprentissage (époques supplémentaires) ;
-  - ENTRAINER = False : poids gelés ; les images d'entraînement servent
-                        seulement à étiqueter les neurones, puis évaluation.
 """
 import os
 import threading
@@ -51,46 +14,36 @@ from brian2 import *
 # =============================================================================
 # 1. PARAMÈTRES
 # =============================================================================
-# Les équations Brian2 lisent ces constantes directement (variables globales
-# du module) : ne pas les renommer sans modifier les équations.
-
 DEVICE = 'cpp_standalone'   # 'runtime' | 'cpp_standalone' | 'cuda_standalone'
-# Threads OpenMP en cpp_standalone (0 = un seul thread). Par défaut : un par
-# cœur physique (os.cpu_count() compte les cœurs logiques, soit 2x avec SMT).
-N_THREADS = 10
+N_THREADS = 10              # fils OpenMP (cpp_standalone)
 
 SEED = 42
-N_SAMPLES = 70000          # sous-ensemble de MNIST (70 000 au total)
+N_SAMPLES = 70000           # nombre d'images MNIST utilisées (70 000 au total)
 FRAC_TEST = 0.10
 FRAC_VALID = 0.10
 N_EPOCHS = 2
 
-# Sauvegarde / rechargement du réseau appris
 DOSSIER_RESULTATS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resultats')
-SAUVEGARDER = True        # écrire resultats/reseau_*.npz à la fin
-CHARGER = None            # chemin d'un .npz (absolu ou relatif à ce fichier) ; None = poids aléatoires
-ENTRAINER = True          # False : plasticité et homéostasie coupées (évaluation d'un réseau chargé)
-# Après l'entraînement, rejouer les images d'entraînement poids GELÉS pour
-# étiqueter les neurones (comme Diehl & Cook) : un seul run donne alors un
-# résultat final. Coûte une passe de plus sur l'entraînement (~+45 min à 7000).
-# False : étiquetage avec les décharges enregistrées pendant l'apprentissage.
-ETIQUETAGE_GELE = True
+SAUVEGARDER = True
+CHARGER = None # Utilisation de poids pré/ existants
+ENTRAINER = True # False pour éval. seulement
 
-N_INPUT = 28 * 28         # un neurone d'entrée par pixel
-N_NEURONS = 200        # neurones excitateurs (= inhibiteurs) ; Diehl & Cook : 100 à 6400
+N_INPUT = 28 * 28 # un neurone d'entrée par pixel
+N_NEURONS = 200
 
-P_EI = 1.0                # connection probability E->I (1.0 = one-to-one, as in Diehl & Cook)
-P_IE = 1.0                # connection probability I->E (1.0 = all E except the partner)
+P_EI = 1.0
+P_IE = 1.0
 
-NORMALISER = True         # normalisation divisive des poids d'entrée
-norm_target = 78.         # somme visée des poids entrant dans chaque neurone
+# Variable pour normalisation des poids
+NORMALISER = True
+norm_target = 78.
 
 defaultclock.dt = 0.5 * ms
 
 time_per_sample = 0.35 * second
 resting_time = 0.15 * second
-T_img = time_per_sample + resting_time     # durée totale d'une image
-dt_on = 50 * ms                            # résolution de l'alternance image/repos
+T_img = time_per_sample + resting_time
+dt_on = 50 * ms
 
 # Neurones
 v_rest_e = -65. * mV
@@ -102,11 +55,11 @@ v_thresh_i = -40. * mV
 refrac_e = 5. * ms
 refrac_i = 2. * ms
 
-# Homéostasie (seuil adaptatif)
+# Homéostasie
 tc_theta = 1e7 * ms
-theta_plus_e = 0.025 * mV     # Diehl & Cook: 0.05 mV (they also re-present images with <5 spikes)
+theta_plus_e = 0.025 * mV
 
-# STDP (Diehl & Cook, éq. 3)
+# STDP
 tc_pre_ee = 20 * ms
 nu_ee_post = 0.01
 wmax = 1.0
@@ -115,7 +68,7 @@ xtar = 0.3
 
 
 def configurer_device():
-    """Choisit le mode d'exécution. Doit être appelé AVANT de créer les objets."""
+    """Choisit le mode d'exécution."""
     if DEVICE == 'runtime':
         prefs.codegen.target = 'cython'   # 'numpy' si pas de compilateur C++
     elif DEVICE == 'cpp_standalone':
@@ -162,18 +115,14 @@ def afficher_echantillon(X, y, index=None):
 # 3. STIMULUS (encodage)
 # =============================================================================
 def encoder_image(sample):
-    """Pixels 0–255 → fréquences (Hz, sans unité ici). Max ≈ 63.75 Hz."""
     return sample / 4
 
 
 def creer_stimulus(images):
     """Construit les TimedArray qui jouent la séquence d'images.
-
-    stimulus(t, i) : fréquence du pixel i de l'image en cours (1 ligne / image)
-    on(t)          : 1 pendant la présentation, 0 pendant le repos
     """
     n_images = len(images)
-    taux = np.array([encoder_image(s) for s in images])          # (n_images, 784)
+    taux = np.array([encoder_image(s) for s in images])
     stimulus = TimedArray(taux * Hz, dt=T_img)
 
     n_on = int(round(time_per_sample / dt_on))
@@ -186,15 +135,14 @@ def creer_stimulus(images):
 # =============================================================================
 # 4. NEURONES
 # =============================================================================
-# Les courants synaptiques sont écrits directement dans dv/dt (les
-# sous-expressions provoquaient un RecursionError dans Synapses()).
-# sum_w : somme des poids entrants, calculée par les synapses (normalisation).
+# sum_w : somme des poids entrants
+# theta : seuil adaptatif
 neuron_model = '''
     homeostasie : boolean (shared)
     dv/dt = ((v_rest - v) + ge * (0*mV - v) + gi * (E_inh - v)) / tau : volt (unless refractory)
     dge/dt = -ge / (1.0*ms)          : 1
     dgi/dt = -gi / (2.0*ms)          : 1
-    dtheta/dt = -int(homeostasie) * theta / tc_theta : volt  # frozen thresholds when homeostasis is off
+    dtheta/dt = -int(homeostasie) * theta / tc_theta : volt
     sum_w  : 1
     tau    : second (constant, shared)
     v_rest : volt   (constant, shared)
@@ -204,8 +152,7 @@ neuron_model = '''
 
 def creer_neurones(n_neurons=N_NEURONS, etat=None):
     """Crée la couche excitatrice (avec homéostasie) et la couche inhibitrice.
-
-    etat : dictionnaire chargé par charger_reseau() (theta appris) ou None.
+    etat : dictionnaire chargé par charger_reseau() ou None.
     """
     excitatory_group = NeuronGroup(
         n_neurons, neuron_model, refractory=refrac_e,
@@ -218,7 +165,7 @@ def creer_neurones(n_neurons=N_NEURONS, etat=None):
     excitatory_group.E_inh = -100. * mV
     excitatory_group.v = v_rest_e
     if etat is not None:
-        excitatory_group.theta = etat['theta'] * volt   # seuils adaptatifs appris
+        excitatory_group.theta = etat['theta'] * volt
 
     inhibitory_group = NeuronGroup(
         n_neurons, neuron_model, refractory=refrac_i,
@@ -261,9 +208,8 @@ stdp_post = '''
 def creer_synapses(input_group, excitatory_group, inhibitory_group, etat=None):
     """Crée les trois populations de synapses.
 
-    etat : dictionnaire chargé par charger_reseau() ou None. S'il est fourni, la
-    connectivité (i, j), les poids et les délais sont repris tels quels, ce qui
-    reconstruit exactement le réseau sauvegardé.
+    etat : dictionnaire chargé par charger_reseau() None (réseau aléatoire).
+    Si un dictionnaire est chargé, c'est que nous avons chargé les poids d'un modèle existant
     """
     # Entrée → excitateurs : plastique (STDP)
     input_synapse = Synapses(input_group, excitatory_group,
@@ -271,7 +217,7 @@ def creer_synapses(input_group, excitatory_group, inhibitory_group, etat=None):
                              on_pre=stdp_pre, on_post=stdp_post,
                              name='entree_vers_E')
     if etat is None:
-        input_synapse.connect(True)           # tout-à-tout
+        input_synapse.connect(True) # entrées all to all
         input_synapse.delay = 'rand()*10*ms'
         input_synapse.w = 'rand()*0.3'
     else:
@@ -280,16 +226,12 @@ def creer_synapses(input_group, excitatory_group, inhibitory_group, etat=None):
         input_synapse.w = etat['entree_w']
     input_synapse.plastic = True
 
-    # Normalisation divisive DANS la simulation : à la fin de chaque période
-    # image + repos, chaque colonne est ramenée à norm_target.
-    # (Pendant le test, plastic = False → les poids ne changent pas.)
     if NORMALISER:
         input_synapse.run_regularly(
             '''facteur = 1 + int(plastic) * (norm_target / (sum_w_post + 1e-12) - 1)
                w = clip(w * facteur, 0, wmax)''',
             dt=T_img, when='end', name='normalisation')
 
-    # Excitateurs → inhibiteurs : synapse EXCITATRICE (ge)
     e_i_synapse = Synapses(excitatory_group, inhibitory_group,
                            model=synapse_model, on_pre='ge_post += w',
                            name='E_vers_I')
@@ -300,7 +242,6 @@ def creer_synapses(input_group, excitatory_group, inhibitory_group, etat=None):
         e_i_synapse.connect(i=etat['ei_i'], j=etat['ei_j'])
         e_i_synapse.w = etat['ei_w']
 
-    # Inhibiteurs → excitateurs : synapse INHIBITRICE (gi)
     i_e_synapse = Synapses(inhibitory_group, excitatory_group,
                            model=synapse_model, on_pre='gi_post += w',
                            name='I_vers_E')
@@ -318,8 +259,8 @@ def creer_synapses(input_group, excitatory_group, inhibitory_group, etat=None):
 # 6. RÉSEAU
 # =============================================================================
 def creer_reseau(images, n_neurons=N_NEURONS, etat=None):
-    """Construit le réseau ; `images` = toutes les images dans l'ordre joué
-    (entraînement puis test). etat : réseau chargé (charger_reseau) ou None."""
+    """Construit le réseau ; `images` = toutes les images dans l'ordre joué.
+    etat : réseau chargé (charger_reseau) ou None."""
     stimulus, on = creer_stimulus(images)
     input_group = PoissonGroup(N_INPUT, rates='stimulus(t, i) * on(t)',
                                namespace={'stimulus': stimulus, 'on': on},
@@ -329,7 +270,7 @@ def creer_reseau(images, n_neurons=N_NEURONS, etat=None):
     input_synapse, e_i_synapse, i_e_synapse = creer_synapses(
         input_group, excitatory_group, inhibitory_group, etat)
 
-    e_monitor = SpikeMonitor(excitatory_group)     # temps et indices des décharges
+    e_monitor = SpikeMonitor(excitatory_group) # temps et indices des décharges
 
     net = Network(input_group, excitatory_group, inhibitory_group,
                   input_synapse, e_i_synapse, i_e_synapse, e_monitor)
@@ -346,9 +287,6 @@ def creer_reseau(images, n_neurons=N_NEURONS, etat=None):
 # =============================================================================
 class BarreProgression:
     """Barre tqdm en nombre d'images, alimentée par le temps simulé.
-
-    En standalone, la simulation tourne dans un programme C++ séparé : un fil
-    Python lit sa sortie (lignes « PROGRESS <t simulé en s> ») pendant qu'il tourne.
     """
 
     def __init__(self, phases):
@@ -361,10 +299,8 @@ class BarreProgression:
         self._demarree = False
 
     def maj(self, t_simule):
-        """Place la barre à l'image en cours pour un temps simulé (s)."""
+        """Place la barre à l'image en cours pour un temps simulé"""
         if not self._demarree:
-            # Redémarre le chronomètre : la vitesse et le temps restant ne
-            # doivent pas compter la compilation.
             self._demarree = True
             self.barre.reset(total=self.barre.total)
         n = min(int(t_simule / float(T_img / second)), self.barre.total)
@@ -375,7 +311,6 @@ class BarreProgression:
 
     def suivre_fichier(self, chemin):
         """Démarre le fil qui lit les lignes PROGRESS écrites dans `chemin`."""
-        # Chemin absolu : Brian2 change de dossier courant pendant l'exécution.
         chemin = os.path.abspath(chemin)
         if os.path.exists(chemin):
             os.remove(chemin)            # sortie d'une exécution précédente
@@ -411,7 +346,7 @@ class BarreProgression:
 
 
 def simuler(reseau, phases):
-    """Joue les phases dans l'ordre, en une seule simulation.
+    """Effectue les différentes phases d'entraînement
 
     phases : liste de (nom, n_images, plastique). plastique=True active la STDP
     et l'homéostasie ; False gèle les poids et les seuils (étiquetage, test).
@@ -419,8 +354,6 @@ def simuler(reseau, phases):
     net = reseau['net']
     barre = BarreProgression(phases)
 
-    # Rapport de progression : appel Python en runtime ; en standalone, le
-    # programme C++ écrit « PROGRESS <t simulé> » que BarreProgression lit.
     if DEVICE == 'runtime':
         rapport = lambda elapsed, completed, start, duration: barre.maj(
             float(start) + completed * float(duration))
@@ -438,9 +371,6 @@ def simuler(reseau, phases):
         net.run(n_images * T_img, report=rapport, report_period=1 * second)
 
     if DEVICE != 'runtime':
-        # Génère, compile et exécute le programme complet (CPU C++ ou GPU).
-        # with_output=False : la sortie du programme va dans results/stdout.txt,
-        # que BarreProgression suit pendant l'exécution.
         dossier = f'build_{DEVICE}'
         barre.suivre_fichier(os.path.join(dossier, 'results', 'stdout.txt'))
         try:
@@ -477,13 +407,13 @@ def compter_decharges(e_monitor, n_images, n_neurons=N_NEURONS):
 # 9. ÉTIQUETAGE
 # =============================================================================
 def etiqueter_neurones(counts_train, y_train):
-    """Diehl & Cook: each neuron gets the class with its highest mean response."""
+    """Chaque neurone est assigné à la classe pour laquelle sa réponse moyenne est maximale."""
     reponse_moyenne = np.zeros((10, counts_train.shape[1]))
     for c in range(10):
-        if np.any(y_train == c):     # une classe absente donnerait NaN, qui gagnerait l'argmax
+        if np.any(y_train == c):     # une classe absente donnerait NaN
             reponse_moyenne[c] = counts_train[y_train == c].mean(axis=0)
-    assignations = np.argmax(reponse_moyenne, axis=0)        # (n_neurons,)
-    assignations[reponse_moyenne.max(axis=0) == 0] = -1      # never fired: no class
+    assignations = np.argmax(reponse_moyenne, axis=0)
+    assignations[reponse_moyenne.max(axis=0) == 0] = -1 # neurone jamais actif : aucune classe
     print("Neurones par classe :", np.bincount(assignations[assignations >= 0], minlength=10))
     return assignations, reponse_moyenne
 
@@ -492,7 +422,7 @@ def etiqueter_neurones(counts_train, y_train):
 # 10. ÉVALUATION
 # =============================================================================
 def evaluer(counts, y, assignations):
-    """Prediction = class whose assigned neurons have the highest mean spike count."""
+    """Prédiction : classe dont les neurones assignés déchargent le plus en moyenne."""
     scores = np.zeros((len(counts), 10))
     for c in range(10):
         neurones = assignations == c
@@ -529,12 +459,7 @@ def afficher_champs_recepteurs(input_synapse, n_neurons=N_NEURONS):
 # 12. SAUVEGARDE / RECHARGEMENT
 # =============================================================================
 def sauvegarder_reseau(reseau, resultats, epoques_totales):
-    """Écrit le réseau appris et les résultats dans resultats/reseau_*.npz.
-
-    Contenu : connectivité, poids et délais des trois synapses, theta des
-    neurones E (de quoi reconstruire exactement le réseau), plus les décomptes
-    de décharges, étiquettes et précisions (pour les analyses des parties III/IV).
-    """
+    """Écrit le réseau appris (synapses, theta) et les résultats dans resultats/reseau_*.npz."""
     os.makedirs(DOSSIER_RESULTATS, exist_ok=True)
     horodatage = time.strftime('%Y%m%d_%H%M%S')
     chemin = os.path.join(
@@ -583,7 +508,7 @@ def charger_reseau(chemin):
 
 
 # =============================================================================
-# 13. PROGRAMME PRINCIPAL
+# 13. MAIN
 # =============================================================================
 def main():
     configurer_device()
@@ -596,23 +521,17 @@ def main():
     epoques_precedentes = int(etat['epoques']) if etat is not None else 0
     n_epochs = N_EPOCHS if ENTRAINER else 0
     epoques_totales = epoques_precedentes + n_epochs
-    # Sans entraînement, la passe gelée sur l'entraînement est toujours nécessaire.
-    etiquetage_gele = ETIQUETAGE_GELE or not ENTRAINER
 
-    # Séquence jouée, en une seule simulation :
-    #   1. entraînement (plastique), N_EPOCHS fois
-    #   2. étiquetage : images d'entraînement, poids gelés
-    #   3. validation, puis test (poids gelés)
+    # Séquence jouée en une simulation : entraînement (plastique),
+    # étiquetage sur l'entraînement, validation et test
     n_tr = len(X_train)
     phases = [('entraînement', n_epochs * n_tr, True),
-              ('étiquetage', n_tr if etiquetage_gele else 0, False),
+              ('étiquetage', n_tr, False),
               ('validation', len(X_valid), False),
               ('test', len(X_test), False)]
     X_seq = np.concatenate([np.tile(X_train, (n_epochs, 1)),
-                            X_train[:phases[1][1]], X_valid, X_test])
+                            X_train, X_valid, X_test])
 
-    # N_NEURONS passed explicitly: default arguments are frozen at import time,
-    # so a value overridden later (e.g. by serie_entrainements.py) would be ignored.
     reseau = creer_reseau(X_seq, N_NEURONS, etat=etat)
     simuler(reseau, phases)
 
@@ -621,26 +540,20 @@ def main():
     debuts = np.concatenate([[0], np.cumsum([n for _, n, _ in phases])])
     par_phase = {nom: counts[debuts[k]:debuts[k + 1]]
                  for k, (nom, _, _) in enumerate(phases)}
+    counts_etiq = par_phase['étiquetage']
     counts_valid, counts_test = par_phase['validation'], par_phase['test']
-    if etiquetage_gele:
-        counts_etiq = par_phase['étiquetage']
-        print("Étiquetage : décharges de la passe poids gelés")
-    else:
-        counts_etiq = par_phase['entraînement'][-n_tr:]   # dernière époque
-        print("Étiquetage : décharges enregistrées pendant l'apprentissage")
 
     assignations, _ = etiqueter_neurones(counts_etiq, y_train)
-    # Précision sur l'entraînement (optimiste : mêmes images que l'étiquetage)
-    print("Entraînement :");
+    print("Entraînement :")
     acc_train, _ = evaluer(counts_etiq, y_train, assignations)
-    print("Validation :");
+    print("Validation :")
     acc_valid, _ = evaluer(counts_valid, y_valid, assignations)
-    print("Test :");
+    print("Test :")
     acc_test, _ = evaluer(counts_test, y_test, assignations)
 
     if SAUVEGARDER:
         sauvegarder_reseau(reseau, dict(
-            assignations=assignations, etiquetage_gele=etiquetage_gele,
+            assignations=assignations,
             acc_train=acc_train, acc_valid=acc_valid, acc_test=acc_test,
             counts_apprentissage=par_phase['entraînement'][-n_tr:].astype(np.uint16),
             counts_etiquetage=counts_etiq.astype(np.uint16), y_train=y_train,
